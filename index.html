@@ -20,6 +20,7 @@
         .btn-danger { background: #dc3545; color: #fff; }
         .btn-secondary { background: #6c757d; color: #fff; }
         .btn-warning { background: #ffc107; color: #000; }
+        .btn-success { background: #28a745; color: #fff; }
         .archived-modal { position: fixed; top: 5%; left: 10%; width: 80%; height: 80%; background: #fff; border: 2px solid #007bff; border-radius: 8px; z-index: 9999; overflow: auto; box-shadow: 0 0 20px #007bff55; display: none; }
         .archived-modal-content { padding: 20px; }
     </style>
@@ -121,7 +122,7 @@
         // ====== 采购清单操作 ======
         function addItem(e) {
             e.preventDefault();
-            if (!currentUser) return;
+            if (!currentUser) { alert('请先输入邮箱并加入协作'); return; }
             const filler = document.getElementById('itemFiller').value.trim();
             const name = document.getElementById('itemName').value.trim();
             const quantity = parseInt(document.getElementById('itemQuantity').value);
@@ -129,26 +130,38 @@
             const link = document.getElementById('itemLink').value.trim();
             const priority = document.getElementById('itemPriority').value.trim();
             const notes = document.getElementById('itemNotes').value.trim();
-            if (!filler || !name || !quantity || !price) { alert('请填写完整信息 | Please fill all fields'); return; }
+            if (!filler || !name || !Number.isFinite(quantity) || !Number.isFinite(price)) { alert('请填写完整信息 | Please fill all fields'); return; }
             const item = {
                 filler, name, quantity, price, total: +(quantity * price).toFixed(2), link, priority, notes,
                 addedBy: currentUser, addedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
             };
+            // Optimistic update
             purchaseList.push(item);
-            db.ref('purchaseList/current').set({
-                items: purchaseList,
-                periodStart: periodStart
-            });
-            clearForm();
+            renderPurchaseTable();
+            db.ref('purchaseList/current').set({ items: purchaseList, periodStart })
+                .then(() => {
+                    clearForm();
+                })
+                .catch(err => {
+                    // Rollback optimistic change
+                    purchaseList.pop();
+                    renderPurchaseTable();
+                    alert('保存到云端失败：' + (err && err.message ? err.message : err));
+                });
         }
 
         function deleteItem(idx) {
             if (!confirm('确定要删除该商品？')) return;
-            purchaseList.splice(idx, 1);
-            db.ref('purchaseList/current').set({
-                items: purchaseList,
-                periodStart: periodStart
-            });
+            const removed = purchaseList.splice(idx, 1)[0];
+            // Optimistic update
+            renderPurchaseTable();
+            db.ref('purchaseList/current').set({ items: purchaseList, periodStart })
+                .catch(err => {
+                    // Rollback
+                    purchaseList.splice(idx, 0, removed);
+                    renderPurchaseTable();
+                    alert('删除失败：' + (err && err.message ? err.message : err));
+                });
         }
 
         function clearForm() {
@@ -434,6 +447,11 @@
         window.showArchivedLists = showArchivedLists;
         window.viewArchivedTable = viewArchivedTable;
         window.deleteArchivedList = deleteArchivedList;
+        window.login = login;
+        window.addItem = addItem;
+        window.deleteItem = deleteItem;
+        window.forceArchive = forceArchive;
+        window.closeArchivedListsView = closeArchivedListsView;
         window.showAuditEntry = showAuditEntry;
         window.renderAuditTable = renderAuditTable;
         window.closeAuditView = closeAuditView;
@@ -441,6 +459,7 @@
         window.exportAuditExcel = exportAuditExcel;
         window.exportArchivedExcel = exportArchivedExcel;
         window.removeDisagreedItems = removeDisagreedItems;
+        window.exportCurrentListExcel = exportCurrentListExcel;
     </script>
 </body>
 </html>
