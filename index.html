@@ -209,20 +209,20 @@
             // Optimistic update
             purchaseList.push(item);
             renderPurchaseTable();
-            db.ref('purchaseList/current').set({ items: purchaseList, periodStart })
-                .then(() => {
-                    setSyncStatus('已同步到云端。', false);
-                    clearForm();
-                    saveCurrentListToLocal();
-                })
-                .catch(err => {
-                    // Rollback optimistic change
-                    purchaseList.pop();
-                    renderPurchaseTable();
-                    setSyncStatus('保存到云端失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
-                    saveCurrentListToLocal();
-                    alert('保存到云端失败，数据已保存在本地（可导出Excel）。');
-                });
+            ensureAnonymousAuth().then(() => {
+                return db.ref('purchaseList/current').set({ items: purchaseList, periodStart });
+            }).then(() => {
+                setSyncStatus('已同步到云端。', false);
+                clearForm();
+                saveCurrentListToLocal();
+            }).catch(err => {
+                // Rollback optimistic change
+                purchaseList.pop();
+                renderPurchaseTable();
+                setSyncStatus('保存到云端失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                saveCurrentListToLocal();
+                alert('保存到云端失败，数据已保存在本地（可导出Excel）。');
+            });
         }
 
         function deleteItem(idx) {
@@ -230,19 +230,19 @@
             const removed = purchaseList.splice(idx, 1)[0];
             // Optimistic update
             renderPurchaseTable();
-            db.ref('purchaseList/current').set({ items: purchaseList, periodStart })
-                .then(() => {
-                    setSyncStatus('已同步到云端。', false);
-                    saveCurrentListToLocal();
-                })
-                .catch(err => {
-                    // Rollback
-                    purchaseList.splice(idx, 0, removed);
-                    renderPurchaseTable();
-                    setSyncStatus('删除失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
-                    saveCurrentListToLocal();
-                    alert('删除失败：已回滚。');
-                });
+            ensureAnonymousAuth().then(() => {
+                return db.ref('purchaseList/current').set({ items: purchaseList, periodStart });
+            }).then(() => {
+                setSyncStatus('已同步到云端。', false);
+                saveCurrentListToLocal();
+            }).catch(err => {
+                // Rollback
+                purchaseList.splice(idx, 0, removed);
+                renderPurchaseTable();
+                setSyncStatus('删除失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                saveCurrentListToLocal();
+                alert('删除失败：已回滚。');
+            });
         }
 
         function clearForm() {
@@ -348,27 +348,37 @@
             if (purchaseList.length === 0) {
                 // 只重置周期
                 periodStart = dayjs().format('YYYY-MM-DD');
-                db.ref('purchaseList/current').set({ items: [], periodStart });
+                ensureAnonymousAuth().then(() => db.ref('purchaseList/current').set({ items: [], periodStart }))
+                    .then(() => setSyncStatus('已重置周期并同步到云端。', false))
+                    .catch(err => setSyncStatus('重置周期时云端同步失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true));
                 return;
             }
             // 归档
             const archiveId = Date.now();
-            db.ref('purchaseList/history/' + archiveId).set({
+            const archivePayload = {
                 items: purchaseList,
                 periodStart: periodStart,
                 periodEnd: dayjs().format('YYYY-MM-DD'),
                 archivedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')
-            }, () => {
-                // 清空当前
-                periodStart = dayjs().format('YYYY-MM-DD');
-                db.ref('purchaseList/current').set({ items: [], periodStart });
-            });
+            };
+            ensureAnonymousAuth().then(() => db.ref('purchaseList/history/' + archiveId).set(archivePayload))
+                .then(() => {
+                    // 清空当前
+                    periodStart = dayjs().format('YYYY-MM-DD');
+                    return db.ref('purchaseList/current').set({ items: [], periodStart });
+                })
+                .then(() => {
+                    setSyncStatus('已归档并同步到云端。', false);
+                })
+                .catch(err => {
+                    setSyncStatus('归档失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                });
         }
 
         // ====== 历史采购列表 ======
         function showArchivedLists() {
             console.log('showArchivedLists called');
-            db.ref('purchaseList/history').once('value').then(snapshot => {
+            ensureAnonymousAuth().then(() => db.ref('purchaseList/history').once('value')).then(snapshot => {
                 const data = snapshot.val() || {};
                 const content = document.getElementById('archivedListsContent');
                 content.innerHTML = '';
@@ -385,6 +395,11 @@
                     });
                 }
                 document.getElementById('archivedListsArea').style.display = 'block';
+            }).catch(err => {
+                setSyncStatus('读取历史列表失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                const content = document.getElementById('archivedListsContent');
+                content.innerHTML = '<div style="color:#c00;">无法读取历史列表，请检查网络与权限。</div>';
+                document.getElementById('archivedListsArea').style.display = 'block';
             });
         }
 
@@ -394,7 +409,7 @@
 
         function viewArchivedTable(key) {
             console.log('viewArchivedTable called', key);
-            db.ref('purchaseList/history/' + key).once('value').then(snapshot => {
+            ensureAnonymousAuth().then(() => db.ref('purchaseList/history/' + key).once('value')).then(snapshot => {
                 const period = snapshot.val();
                 let html = `<h4>周期详情 | Cycle Detail</h4><div>开始 | Start: ${period.periodStart || ''}<br>结束 | End: ${period.periodEnd || ''}<br>归档时间 | Archived: ${period.archivedAt || ''}<br>商品数 | Items: ${period.items ? period.items.length : 0}</div><table border='1' style='width:100%;margin-top:10px;'><thead><tr><th>填写人 | Filler</th><th>商品名称 | Product Name</th><th>数量 | Quantity</th><th>单价 | Unit Price</th><th>总价 | Total Price</th><th>商品链接 | Product Link</th><th>优先级 | Priority</th><th>备注 | Notes</th><th>添加人邮箱 | Email</th><th>添加时间 | Added At</th></tr></thead><tbody>`;
                 (period.items || []).forEach(item => {
@@ -402,15 +417,17 @@
                 });
                 html += '</tbody></table>';
                 document.getElementById('archivedListsContent').innerHTML = html;
+            }).catch(err => {
+                setSyncStatus('读取历史详情失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
             });
         }
 
         function deleteArchivedList(key) {
             console.log('deleteArchivedList called', key);
             if (!confirm('确定要删除该历史采购列表？此操作不可恢复！ | Are you sure to delete this archived list?')) return;
-            db.ref('purchaseList/history/' + key).remove(() => {
-                showArchivedLists();
-            });
+            ensureAnonymousAuth().then(() => db.ref('purchaseList/history/' + key).remove())
+                .then(() => showArchivedLists())
+                .catch(err => setSyncStatus('删除历史失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true));
         }
 
         function exportArchivedExcel(key) {
