@@ -548,6 +548,12 @@
 
         // 事件委托绑定
         document.addEventListener('DOMContentLoaded', function() {
+            // 提示在 file:// 下可能导致 Firebase Auth 超时，建议通过 http://localhost 访问
+            try {
+                if (location.protocol === 'file:') {
+                    setSyncStatus('检测到以 file:// 打开。为保证匿名登录，请使用本地服务器打开（例如 http://localhost:5500），并在 Firebase Authentication 的 Authorized domains 中添加 localhost。', true);
+                }
+            } catch (e) {}
             document.getElementById('archivedListsContent').addEventListener('click', function(e) {
                 if (e.target.classList.contains('view-archived-btn')) {
                     viewArchivedTable(e.target.dataset.key);
@@ -559,6 +565,8 @@
                     exportArchivedExcel(e.target.dataset.key);
                 }
             });
+            // 尝试提前建立匿名会话（不阻塞）
+            ensureAnonymousAuth();
         });
 
         // 将所有弹窗和历史/审核相关函数挂载到window，确保按钮点击必定有响应
