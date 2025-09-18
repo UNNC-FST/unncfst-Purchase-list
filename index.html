@@ -36,6 +36,7 @@
         <hr>
         <div id="mainArea" style="display:none;">
             <h4>当前采购清单 | Current Purchase List</h4>
+            <div id="syncStatus" style="margin:8px 0; display:none; padding:6px 10px; border-radius:4px; background:#fff3cd; color:#664d03; border:1px solid #ffe69c;"></div>
             <form onsubmit="addItem(event)">
                 <input id="itemFiller" placeholder="填写人 | Filler" required style="width:120px;">
                 <input id="itemName" placeholder="商品名称 | Product Name" required>
@@ -109,6 +110,32 @@
         let purchaseList = [];
         let archiveTimer = null;
 
+        // ====== 同步状态与本地备份 ======
+        function setSyncStatus(message, isError) {
+            const el = document.getElementById('syncStatus');
+            if (!message) { el.style.display = 'none'; el.textContent = ''; return; }
+            el.textContent = message;
+            el.style.display = 'block';
+            el.style.background = isError ? '#fde2e1' : '#eaf4ff';
+            el.style.color = isError ? '#8a1f16' : '#084298';
+            el.style.borderColor = isError ? '#f5c2c7' : '#b6d4fe';
+        }
+
+        function saveCurrentListToLocal() {
+            try {
+                const payload = { items: purchaseList, periodStart };
+                localStorage.setItem('purchaseList_current_backup', JSON.stringify(payload));
+            } catch (e) {}
+        }
+
+        function loadCurrentListFromLocal() {
+            try {
+                const raw = localStorage.getItem('purchaseList_current_backup');
+                if (!raw) return null;
+                return JSON.parse(raw);
+            } catch (e) { return null; }
+        }
+
         // ====== 登录 ======
         function login() {
             const email = document.getElementById('useremail').value.trim();
@@ -140,13 +167,17 @@
             renderPurchaseTable();
             db.ref('purchaseList/current').set({ items: purchaseList, periodStart })
                 .then(() => {
+                    setSyncStatus('已同步到云端。', false);
                     clearForm();
+                    saveCurrentListToLocal();
                 })
                 .catch(err => {
                     // Rollback optimistic change
                     purchaseList.pop();
                     renderPurchaseTable();
-                    alert('保存到云端失败：' + (err && err.message ? err.message : err));
+                    setSyncStatus('保存到云端失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                    saveCurrentListToLocal();
+                    alert('保存到云端失败，数据已保存在本地（可导出Excel）。');
                 });
         }
 
@@ -156,11 +187,17 @@
             // Optimistic update
             renderPurchaseTable();
             db.ref('purchaseList/current').set({ items: purchaseList, periodStart })
+                .then(() => {
+                    setSyncStatus('已同步到云端。', false);
+                    saveCurrentListToLocal();
+                })
                 .catch(err => {
                     // Rollback
                     purchaseList.splice(idx, 0, removed);
                     renderPurchaseTable();
-                    alert('删除失败：' + (err && err.message ? err.message : err));
+                    setSyncStatus('删除失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                    saveCurrentListToLocal();
+                    alert('删除失败：已回滚。');
                 });
         }
 
@@ -176,14 +213,51 @@
 
         // ====== 实时监听当前采购清单 ======
         function loadCurrentList() {
-            db.ref('purchaseList/current').on('value', snapshot => {
-                const data = snapshot.val();
-                purchaseList = data && data.items ? data.items : [];
-                periodStart = data && data.periodStart ? data.periodStart : dayjs().format('YYYY-MM-DD');
+            try {
+                db.ref('purchaseList/current').on('value', snapshot => {
+                    const data = snapshot.val();
+                    if (data && (Array.isArray(data.items) || data.periodStart)) {
+                        purchaseList = data.items || [];
+                        periodStart = data.periodStart || dayjs().format('YYYY-MM-DD');
+                        setSyncStatus('', false);
+                        saveCurrentListToLocal();
+                    } else {
+                        // Cloud empty, try local backup
+                        const local = loadCurrentListFromLocal();
+                        if (local) {
+                            purchaseList = local.items || [];
+                            periodStart = local.periodStart || dayjs().format('YYYY-MM-DD');
+                            setSyncStatus('正在使用本地数据备份（云端为空或不可用）。', true);
+                        } else {
+                            purchaseList = [];
+                            periodStart = dayjs().format('YYYY-MM-DD');
+                        }
+                    }
+                    renderPurchaseTable();
+                    updatePeriodStatus();
+                    checkAndAutoArchive();
+                }, err => {
+                    const local = loadCurrentListFromLocal();
+                    if (local) {
+                        purchaseList = local.items || [];
+                        periodStart = local.periodStart || dayjs().format('YYYY-MM-DD');
+                        setSyncStatus('云端读取失败，已加载本地备份：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                    } else {
+                        setSyncStatus('云端读取失败，且没有本地备份可用。', true);
+                    }
+                    renderPurchaseTable();
+                    updatePeriodStatus();
+                });
+            } catch (e) {
+                const local = loadCurrentListFromLocal();
+                if (local) {
+                    purchaseList = local.items || [];
+                    periodStart = local.periodStart || dayjs().format('YYYY-MM-DD');
+                    setSyncStatus('初始化云端失败，已加载本地备份：' + (e && e.message ? e.message : e), true);
+                }
                 renderPurchaseTable();
                 updatePeriodStatus();
-                checkAndAutoArchive();
-            });
+            }
         }
 
         function renderPurchaseTable() {
