@@ -7,6 +7,7 @@
     <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-auth-compat.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #f8f9fa; margin: 0; }
@@ -103,6 +104,7 @@
         };
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
+        const auth = firebase.auth();
 
         // ====== 全局变量 ======
         let currentUser = null;
@@ -136,14 +138,38 @@
             } catch (e) { return null; }
         }
 
-        // ====== 登录 ======
+        // ====== 登录与匿名鉴权 ======
+        function ensureAnonymousAuth() {
+            return new Promise((resolve, reject) => {
+                if (auth.currentUser) { resolve(auth.currentUser); return; }
+                auth.onAuthStateChanged(u => { if (u) resolve(u); });
+                auth.signInAnonymously().catch(err => reject(err));
+            });
+        }
+
         function login() {
             const email = document.getElementById('useremail').value.trim();
             if (!email) { alert('请输入邮箱'); return; }
-            currentUser = email;
-            document.getElementById('userInfo').textContent = `当前用户: ${email}`;
-            document.getElementById('mainArea').style.display = '';
-            loadCurrentList();
+            setSyncStatus('正在连接云端…', false);
+            ensureAnonymousAuth()
+                .then(() => {
+                    currentUser = email;
+                    document.getElementById('userInfo').textContent = `当前用户: ${email}`;
+                    document.getElementById('mainArea').style.display = '';
+                    setSyncStatus('', false);
+                    loadCurrentList();
+                })
+                .catch(err => {
+                    setSyncStatus('登录云端失败：' + (err && (err.code || err.message) ? (err.code || err.message) : err), true);
+                    // 仍允许仅本地使用
+                    currentUser = email;
+                    document.getElementById('userInfo').textContent = `当前用户: ${email}（离线模式）`;
+                    document.getElementById('mainArea').style.display = '';
+                    const local = loadCurrentListFromLocal();
+                    if (local) { purchaseList = local.items || []; periodStart = local.periodStart || dayjs().format('YYYY-MM-DD'); }
+                    renderPurchaseTable();
+                    updatePeriodStatus();
+                });
         }
 
         // ====== 采购清单操作 ======
